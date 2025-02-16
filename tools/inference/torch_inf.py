@@ -16,7 +16,11 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"
 from src.core import YAMLConfig
 
 
-def draw(images, labels, boxes, scores, thrh=0.4):
+labels = ["bowser", "cam_lakitu", "cam_mario", "cam_xcam", "castle_door", "coin_count", "counter_0", "counter_1", "counter_2", "counter_3", "counter_4", "counter_5", "counter_6", "counter_7", "counter_8", "counter_9", "course_number", "intro_jp_text", "intro_us_text", "key", "life_count", "logo", "mips", "save_menu", "star", "star_count", "wii_classic_controller"]
+labels_mapping = dict(enumerate(labels))
+
+
+def draw(output_path, images, labels, boxes, scores, thrh=0.4):
     for i, im in enumerate(images):
         draw = ImageDraw.Draw(im)
 
@@ -27,32 +31,54 @@ def draw(images, labels, boxes, scores, thrh=0.4):
 
         for j, b in enumerate(box):
             draw.rectangle(list(b), outline="red")
+
+            txt = f"{labels_mapping[lab[j].item()]} {round(scrs[j].item(), 2)}"
+
+            print(txt, b)
             draw.text(
                 (b[0], b[1]),
-                text=f"{lab[j].item()} {round(scrs[j].item(), 2)}",
+                text=txt,
                 fill="blue",
             )
 
-        im.save("torch_results.jpg")
+        im.save(output_path)
+
+
+import time
+from datetime import timedelta
+from contextlib import contextmanager
+from pathlib import Path
+
+
+@contextmanager
+def time_block(name):
+    start_time = time.time()
+    yield
+    duration = timedelta(seconds=time.time() - start_time)
+    print('>>>> block {} ran in {} <<<<<'.format(name, duration))
 
 
 def process_image(model, device, file_path):
-    im_pil = Image.open(file_path).convert("RGB")
-    w, h = im_pil.size
-    orig_size = torch.tensor([[w, h]]).to(device)
+    with time_block('process_image'):
+        im_pil = Image.open(file_path).convert("RGB")
+        w, h = im_pil.size
+        orig_size = torch.tensor([[w, h]]).to(device)
 
-    transforms = T.Compose(
-        [
-            T.Resize((640, 640)),
-            T.ToTensor(),
-        ]
-    )
-    im_data = transforms(im_pil).unsqueeze(0).to(device)
+        transforms = T.Compose(
+            [
+                T.Resize((640, 640)),
+                T.ToTensor(),
+            ]
+        )
+        im_data = transforms(im_pil).unsqueeze(0).to(device)
 
-    output = model(im_data, orig_size)
-    labels, boxes, scores = output
+        with time_block('model_call'):
+            output = model(im_data, orig_size)
+        labels, boxes, scores = output
 
-    draw([im_pil], labels, boxes, scores)
+    with time_block('draw'):
+        output_path = str(Path(file_path).name.replace('.jpg', '.preds.jpg'))
+        draw(output_path, [im_pil], labels, boxes, scores)
 
 
 def process_video(model, device, file_path):
@@ -144,14 +170,14 @@ def main(args):
     model = Model().to(device)
 
     # Check if the input file is an image or a video
-    file_path = args.input
-    if os.path.splitext(file_path)[-1].lower() in [".jpg", ".jpeg", ".png", ".bmp"]:
-        # Process as image
-        process_image(model, device, file_path)
-        print("Image processing complete.")
-    else:
-        # Process as video
-        process_video(model, device, file_path)
+    for file_path in args.input:
+        if os.path.splitext(file_path)[-1].lower() in [".jpg", ".jpeg", ".png", ".bmp"]:
+            # Process as image
+            process_image(model, device, file_path)
+            print("Image processing complete.")
+        else:
+            # Process as video
+            process_video(model, device, file_path)
 
 
 if __name__ == "__main__":
@@ -160,7 +186,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-c", "--config", type=str, required=True)
     parser.add_argument("-r", "--resume", type=str, required=True)
-    parser.add_argument("-i", "--input", type=str, required=True)
     parser.add_argument("-d", "--device", type=str, default="cpu")
+    parser.add_argument("input", nargs='+', type=str)
     args = parser.parse_args()
     main(args)
